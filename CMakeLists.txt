@@ -37,6 +37,7 @@ option(BERT_FMA                    "bert: enable FMA"                           
 # 3rd party libs
 option(BERT_ACCELERATE             "bert: enable Accelerate framework"                    ON)
 option(BERT_OPENBLAS               "bert: use OpenBLAS"                                   OFF)
+option(BERT_METAL                  "bert: use Metal"                                      OFF)
 
 #
 # Compile flags
@@ -127,6 +128,32 @@ if (BERT_LTO)
     endif()
 endif()
 
+if (BERT_METAL)
+    find_library(FOUNDATION_LIBRARY         Foundation              REQUIRED)
+    find_library(METAL_FRAMEWORK            Metal                   REQUIRED)
+    find_library(METALKIT_FRAMEWORK         MetalKit                REQUIRED)
+    find_library(METALPERFORMANCE_FRAMEWORK MetalPerformanceShaders REQUIRED)
+
+    set(GGML_SOURCES_METAL ggml-metal.m ggml-metal.h)
+
+    add_compile_definitions(GGML_USE_METAL)
+    add_compile_definitions(GGML_METAL_NDEBUG)
+
+    # get full path to the file
+    #add_compile_definitions(GGML_METAL_DIR_KERNELS="${CMAKE_CURRENT_SOURCE_DIR}/")
+
+    # copy ggml-metal.metal to bin directory
+    configure_file(ggml-metal.metal bin/ggml-metal.metal COPYONLY)
+
+    set(BERT_EXTRA_LIBS ${BERT_EXTRA_LIBS}
+        ${FOUNDATION_LIBRARY}
+        ${METAL_FRAMEWORK}
+        ${METALKIT_FRAMEWORK}
+        ${METALPERFORMANCE_FRAMEWORK}
+        )
+endif()
+
+
 # Architecture specific
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
@@ -189,7 +216,15 @@ if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
-add_subdirectory(ggml)
+add_library(ggml OBJECT
+            ggml.c
+            ggml.h
+            ${GGML_SOURCES_CUDA}
+            ${GGML_SOURCES_OPENCL}
+            ${GGML_SOURCES_METAL}
+            ${GGML_SOURCES_MPI}
+            ${GGML_SOURCES_EXTRA}
+            )
 
 add_library(bert
             bert.cpp
@@ -208,6 +243,10 @@ if (BUILD_SHARED_LIBS)
 
     set_target_properties(bert PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(bert PRIVATE BERT_SHARED BERT_BUILD)
+    if (BERT_METAL)
+        set_target_properties(bert PROPERTIES RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ggml-metal.metal")
+    endif()
+
 else()
     add_subdirectory(examples)
     add_subdirectory(models)
