@@ -1,3 +1,11 @@
+// Defines fileno on msys:
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#endif
+
 #include "bert.h"
 #include "ggml.h"
 
@@ -5,18 +13,32 @@
 #include "ggml-metal.h"
 #endif
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <cassert>
+#include <cinttypes>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
-#include <map>
-#include <string>
-#include <vector>
+#include <initializer_list>
 #include <iostream>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <numeric>
+#include <queue>
+#include <random>
 #include <regex>
+#include <sstream>
+#include <string>
 #include <thread>
-#include <algorithm>
+#include <unordered_map>
+#include <vector>
+
 
 // default hparams (all-MiniLM-L6-v2)
 struct bert_hparams
@@ -749,7 +771,7 @@ struct bert_ctx * bert_load_from_file(const char *fname)
     }
 
     LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(new_bert->ctx_metal, "data", data_ptr, data_size, max_size));
-    LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(new_bert->ctx_metal, "eval", new_bert->buf_compute.addr, new_bert->buf_compute.size, 0));
+    LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(new_bert->ctx_metal, "eval", new_bert->buf_compute.data, new_bert->buf_compute.size, 0));
 
     // LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(ctx->ctx_metal, "kv",   ctx->kv_self.buf.addr, ctx->kv_self.buf.size, 0));
 
@@ -848,7 +870,7 @@ void bert_eval_batch(
 
         struct ggml_context *ctx0 = ggml_init(params);
         struct ggml_cgraph gf = {};
-        gf.n_threads = n_threads;
+        // gf.n_threads = n_threads;
 
         // Embeddings. word_embeddings + token_type_embeddings + position_embeddings
         struct ggml_tensor *token_layer = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N);
@@ -987,10 +1009,10 @@ void bert_eval_batch(
         ggml_build_forward_expand(&gf, output);
 
 #ifdef GGML_USE_METAL
-        if (ctx0.ctx_metal && N == 1) {
-            ggml_metal_set_n_cb     (ctx0.ctx_metal, n_threads);
-            ggml_metal_graph_compute(ctx0.ctx_metal, &gf);
-            ggml_metal_get_tensor   (ctx0.ctx_metal, cur);
+        if (ctx0->ctx_metal && N == 1) {
+            ggml_metal_set_n_cb     (ctx0->ctx_metal, n_threads);
+            ggml_metal_graph_compute(ctx0->ctx_metal, &gf);
+            ggml_metal_get_tensor   (ctx0->ctx_metal, output);
         } else {
             // IMPORTANT:
             // Since we don't have efficient Matrix x Matrix Metal multiplication yet, we fallback to vanilla
