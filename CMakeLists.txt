@@ -219,11 +219,7 @@ endif()
 add_library(ggml OBJECT
             ggml.c
             ggml.h
-            ${GGML_SOURCES_CUDA}
-            ${GGML_SOURCES_OPENCL}
             ${GGML_SOURCES_METAL}
-            ${GGML_SOURCES_MPI}
-            ${GGML_SOURCES_EXTRA}
             )
 
 add_library(bert
