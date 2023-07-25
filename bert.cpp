@@ -1,6 +1,10 @@
 #include "bert.h"
 #include "ggml.h"
 
+#ifdef GGML_USE_METAL
+#include "ggml-metal.h"
+#endif
+
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -76,27 +80,50 @@ struct bert_model
 
     std::vector<bert_layer> layers;
 
+    // TODO: refer to this in init
     struct ggml_context *ctx;
     std::map<std::string, struct ggml_tensor *> tensors;
 };
 
 // Replacement for std::vector<uint8_t> that doesn't require zero-initialization.
 struct bert_buffer {
+    // uint8_t * addr = NULL;
     uint8_t * data = NULL;
     size_t size = 0;
 
-    void resize(size_t size) {
+    void resize(size_t len) {
+#ifdef GGML_USE_METAL
+        free(data);
+        int result = posix_memalign((void **) &data, getpagesize(), len);
+        if (result == 0) {
+            memset(data, 0, len);
+        }
+        else {
+            data = NULL;
+        }
+#else
         delete[] data;
-        data = new uint8_t[size];
-        this->size = size;
+        data = new uint8_t[len];
+#endif
+        size = len;
     }
 
+
     ~bert_buffer() {
+#ifdef GGML_USE_METAL
+        free(data);
+#else
         delete[] data;
+#endif
+        data = NULL;
+
     }
 };
 
 
+// TODO: add metal context
+// init ctx somewhere
+// ggml add buffer: data/eval
 struct bert_ctx
 {
     bert_model model;
@@ -105,7 +132,12 @@ struct bert_ctx
     size_t mem_per_token;
     int64_t mem_per_input;
     int32_t max_batch_n;
-    bert_buffer buf_compute;
+    bert_buffer buf_compute; // eval buffer
+
+#ifdef GGML_USE_METAL
+    ggml_metal_context * ctx_metal = NULL;
+#endif
+
 };
 
 int32_t bert_n_embd(bert_ctx * ctx)
@@ -690,6 +722,43 @@ struct bert_ctx * bert_load_from_file(const char *fname)
     }
     printf("%s: mem_per_token %zd KB, mem_per_input %lld MB\n", __func__, new_bert->mem_per_token / (1 << 10), new_bert->mem_per_input / (1 << 20));
 
+#ifdef GGML_USE_METAL
+    // this allocates all Metal resources and memory buffers
+    new_bert->ctx_metal = ggml_metal_init(1);
+
+    void * data_ptr  = NULL;
+    size_t data_size = 0;
+
+    // if (params.use_mmap) {
+    //     data_ptr  = ctx->model.mapping->addr;
+    //     data_size = ctx->model.mapping->size;
+    // } else {
+        data_ptr  = ggml_get_mem_buffer(new_bert->model.ctx);
+        data_size = ggml_get_mem_size  (new_bert->model.ctx);
+    // }
+
+    const size_t max_size = ggml_get_max_tensor_size(new_bert->model.ctx);
+
+    fprintf(stderr, "%s: max tensor size = %8.2f MB\n", __func__, max_size/1024.0/1024.0);
+
+#define LLAMA_METAL_CHECK_BUF(result)                                          \
+    if (!(result)) {                                                           \
+        fprintf(stderr, "%s: failed to add buffer\n", __func__);               \
+        bert_free(ctx);                                                       \
+        return NULL;                                                           \
+    }
+
+    LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(new_bert->ctx_metal, "data", data_ptr, data_size, max_size));
+    LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(new_bert->ctx_metal, "eval", new_bert->buf_compute.addr, new_bert->buf_compute.size, 0));
+
+    // LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(ctx->ctx_metal, "kv",   ctx->kv_self.buf.addr, ctx->kv_self.buf.size, 0));
+
+    // LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(ctx->ctx_metal, "scr0", ctx->buf_scratch[0].addr, ctx->buf_scratch[0].size, 0));
+    // LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(ctx->ctx_metal, "scr1", ctx->buf_scratch[1].addr, ctx->buf_scratch[1].size, 0));
+#undef LLAMA_METAL_CHECK_BUF
+#endif
+
+
     return new_bert;
 }
 
@@ -916,7 +985,29 @@ void bert_eval_batch(
         ggml_tensor *output = inpL;
         // run the computation
         ggml_build_forward_expand(&gf, output);
+
+#ifdef GGML_USE_METAL
+        if (ctx0.ctx_metal && N == 1) {
+            ggml_metal_set_n_cb     (ctx0.ctx_metal, n_threads);
+            ggml_metal_graph_compute(ctx0.ctx_metal, &gf);
+            ggml_metal_get_tensor   (ctx0.ctx_metal, cur);
+        } else {
+            // IMPORTANT:
+            // Since we don't have efficient Matrix x Matrix Metal multiplication yet, we fallback to vanilla
+            // ggml_graph_compute(). It uses Apple's Accelerate CBLAS API which takes advantage of the ANE or the AMX
+            // coprocessor.
+            //
+            // When we implement Matrix x Matrix Metal multiplication, we can avoid this branch.
+            // But for now, we have focused only on Matrix x Vector Metal multiplication.
+            //
+            // TODO: avoid these syncs via shared memory (ref #1696)
+            //
+
+            ggml_graph_compute(ctx0, &gf);
+        }
+#else
         ggml_graph_compute(ctx0, &gf);
+#endif
 
 
         // float *dat = ggml_get_data_f32(output);
