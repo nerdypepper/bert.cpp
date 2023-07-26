@@ -39,6 +39,17 @@
 #include <unordered_map>
 #include <vector>
 
+static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * graph, int n_threads) {
+    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
+
+    if (plan.work_size > 0) {
+        buf.resize(plan.work_size);
+        plan.work_data = buf.data();
+    }
+
+    ggml_graph_compute(graph, &plan);
+}
+
 
 // default hparams (all-MiniLM-L6-v2)
 struct bert_hparams
@@ -155,6 +166,7 @@ struct bert_ctx
     int64_t mem_per_input;
     int32_t max_batch_n;
     bert_buffer buf_compute; // eval buffer
+    std::vector<uint8_t> work_buffer;
 
 #ifdef GGML_USE_METAL
     ggml_metal_context * ctx_metal = NULL;
@@ -1025,10 +1037,10 @@ void bert_eval_batch(
             // TODO: avoid these syncs via shared memory (ref #1696)
             //
 
-            ggml_graph_compute(ctx0, &gf);
+            ggml_graph_compute_helper(ctx->work_buffer, &gf, n_threads);
         }
 #else
-        ggml_graph_compute(ctx0, &gf);
+    ggml_graph_compute_helper(ctx->work_buffer, &gf, n_threads);
 #endif
 
 
