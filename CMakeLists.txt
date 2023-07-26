@@ -43,6 +43,8 @@ option(BERT_METAL                  "bert: use Metal"                            
 # Compile flags
 #
 
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 set(CMAKE_C_STANDARD_REQUIRED true)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -76,6 +78,32 @@ if (APPLE AND BERT_ACCELERATE)
         message(WARNING "Accelerate framework not found")
     endif()
 endif()
+
+if (BERT_METAL)
+    find_library(FOUNDATION_LIBRARY         Foundation              REQUIRED)
+    find_library(METAL_FRAMEWORK            Metal                   REQUIRED)
+    find_library(METALKIT_FRAMEWORK         MetalKit                REQUIRED)
+    find_library(METALPERFORMANCE_FRAMEWORK MetalPerformanceShaders REQUIRED)
+
+    set(GGML_SOURCES_METAL ggml-metal.m ggml-metal.h)
+
+    add_compile_definitions(GGML_USE_METAL)
+    add_compile_definitions(GGML_METAL_NDEBUG)
+
+    # get full path to the file
+    #add_compile_definitions(GGML_METAL_DIR_KERNELS="${CMAKE_CURRENT_SOURCE_DIR}/")
+
+    # copy ggml-metal.metal to bin directory
+    configure_file(ggml-metal.metal bin/ggml-metal.metal COPYONLY)
+
+    set(BERT_EXTRA_LIBS ${BERT_EXTRA_LIBS}
+        ${FOUNDATION_LIBRARY}
+        ${METAL_FRAMEWORK}
+        ${METALKIT_FRAMEWORK}
+        ${METALPERFORMANCE_FRAMEWORK}
+        )
+endif()
+
 if (BERT_OPENBLAS)
     if (BERT_STATIC)
         set(BLA_STATIC ON)
@@ -127,32 +155,6 @@ if (BERT_LTO)
         message(WARNING "IPO is not supported: ${output}")
     endif()
 endif()
-
-if (BERT_METAL)
-    find_library(FOUNDATION_LIBRARY         Foundation              REQUIRED)
-    find_library(METAL_FRAMEWORK            Metal                   REQUIRED)
-    find_library(METALKIT_FRAMEWORK         MetalKit                REQUIRED)
-    find_library(METALPERFORMANCE_FRAMEWORK MetalPerformanceShaders REQUIRED)
-
-    set(GGML_SOURCES_METAL ggml-metal.m ggml-metal.h)
-
-    add_compile_definitions(GGML_USE_METAL)
-    add_compile_definitions(GGML_METAL_NDEBUG)
-
-    # get full path to the file
-    #add_compile_definitions(GGML_METAL_DIR_KERNELS="${CMAKE_CURRENT_SOURCE_DIR}/")
-
-    # copy ggml-metal.metal to bin directory
-    configure_file(ggml-metal.metal bin/ggml-metal.metal COPYONLY)
-
-    set(BERT_EXTRA_LIBS ${BERT_EXTRA_LIBS}
-        ${FOUNDATION_LIBRARY}
-        ${METAL_FRAMEWORK}
-        ${METALKIT_FRAMEWORK}
-        ${METALPERFORMANCE_FRAMEWORK}
-        )
-endif()
-
 
 # Architecture specific
 # TODO: probably these flags need to be tweaked on some architectures
@@ -221,6 +223,18 @@ add_library(ggml OBJECT
             ggml.h
             ${GGML_SOURCES_METAL}
             )
+
+target_compile_features(ggml PUBLIC c_std_11) # don't bump
+target_link_libraries(ggml PUBLIC Threads::Threads ${BERT_EXTRA_LIBS})
+
+add_library(ggml_static STATIC $<TARGET_OBJECTS:ggml>)
+if (BUILD_SHARED_LIBS)
+    set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    add_library(ggml_shared SHARED $<TARGET_OBJECTS:ggml>)
+    target_link_libraries(ggml_shared PUBLIC Threads::Threads ${BERT_EXTRA_LIBS})
+    install(TARGETS ggml_shared LIBRARY)
+endif()
+
 
 add_library(bert
             bert.cpp
