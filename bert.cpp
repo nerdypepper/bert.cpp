@@ -13,6 +13,7 @@
 #include "ggml-metal.h"
 #endif
 
+#include <unistd.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -864,6 +865,14 @@ void bert_eval_batch(
 
         const int d_head = n_embd / n_head;
 
+        // use 2 scratch buffers
+        // TODO: very hacky solution - reimplement in a more elegant way
+        static size_t scr0_size = 256u*1024*1024;
+        static void * scr0 = malloc(scr0_size);
+
+        static size_t scr1_size = 256u*1024*1024;
+        static void * scr1 = malloc(scr1_size);
+
         std::vector<float> result;
         if (N > n_max_tokens)
         {
@@ -921,6 +930,7 @@ void bert_eval_batch(
         {
             struct ggml_tensor *cur = inpL;
 
+            ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
             // self-attention
             {
                 struct ggml_tensor *Qcur = cur;
@@ -1011,11 +1021,13 @@ void bert_eval_batch(
         ggml_set_f32(sum, 1.0f / N);
         inpL = ggml_mul_mat(ctx0, inpL, sum);
 
+        ggml_set_scratch(ctx0, { 0, scr1_size, scr1, });
         // normalizer
         ggml_tensor *length = ggml_sqrt(ctx0,
                                         ggml_sum(ctx0, ggml_sqr(ctx0, inpL)));
         inpL = ggml_scale(ctx0, inpL, ggml_div(ctx0, ggml_new_f32(ctx0, 1.0f), length));
 
+        ggml_set_scratch(ctx0, { 0, 0, nullptr, });
         ggml_tensor *output = inpL;
         // run the computation
         ggml_build_forward_expand(&gf, output);
