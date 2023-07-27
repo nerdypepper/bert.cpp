@@ -503,7 +503,7 @@ struct bert_ctx * bert_load_from_file(const char *fname)
 
         const int n_embd = hparams.n_embd;
         const int n_layer = hparams.n_layer;
-        const int n_max_tokens = hparams.n_max_tokens;
+        const int n_max_tokens = hparams.n_max_tokens / 2;
         const int n_intermediate = hparams.n_intermediate;
         const int n_vocab = hparams.n_vocab;
 
@@ -778,7 +778,7 @@ struct bert_ctx * bert_load_from_file(const char *fname)
 #define LLAMA_METAL_CHECK_BUF(result)                                          \
     if (!(result)) {                                                           \
         fprintf(stderr, "%s: failed to add buffer\n", __func__);               \
-        bert_free(ctx);                                                       \
+        bert_free(new_bert);                                                   \
         return NULL;                                                           \
     }
 
@@ -1021,10 +1021,10 @@ void bert_eval_batch(
         ggml_build_forward_expand(&gf, output);
 
 #ifdef GGML_USE_METAL
-        if (ctx0->ctx_metal && N == 1) {
-            ggml_metal_set_n_cb     (ctx0->ctx_metal, n_threads);
-            ggml_metal_graph_compute(ctx0->ctx_metal, &gf);
-            ggml_metal_get_tensor   (ctx0->ctx_metal, output);
+        if (ctx->ctx_metal && N == 1) {
+            ggml_metal_set_n_cb     (ctx->ctx_metal, n_threads);
+            ggml_metal_graph_compute(ctx->ctx_metal, &gf);
+            ggml_metal_get_tensor   (ctx->ctx_metal, output);
         } else {
             // IMPORTANT:
             // Since we don't have efficient Matrix x Matrix Metal multiplication yet, we fallback to vanilla
